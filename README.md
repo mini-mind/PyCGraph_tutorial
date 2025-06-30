@@ -1,4 +1,4 @@
-# CGraph Python 教程
+# PyCGraph 简明教程
 
 ## 什么是 CGraph？
 
