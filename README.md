@@ -1,5 +1,9 @@
 # PyCGraph 简明教程
 
+[English](README_en.md) | 中文
+
+> **源库地址**: [https://github.com/ChunelFeng/CGraph](https://github.com/ChunelFeng/CGraph)
+
 ## 什么是 CGraph？
 
 CGraph 是一个高性能的**有向无环图（DAG）计算框架**，专门用于构建和执行复杂的数据处理流水线。它的 Python 绑定 PyCGraph 让 Python 开发者能够轻松构建高效的并行计算图。
@@ -1068,44 +1072,6 @@ pipeline.addGEvent(MyEmailEvent(), "status_event")  # 都会被触发
 2. **错误隔离**：事件处理的错误不会影响主流程
 3. **性能考虑**：频繁的事件触发可能影响性能
 4. **调试困难**：异步事件可能增加调试复杂度
-
-## 高级特性
-
-### 多管道
-
-```python
-def tutorial_multi_pipeline():
-    # 创建多个独立的管道
-    pipeline1 = GPipeline()
-    pipeline2 = GPipeline()
-    # ... 分别配置和运行
-```
-
-### 模板节点
-
-```python
-class MyTemplateNode(GNode):
-    def __init__(self, template_type="default"):
-        super().__init__()
-        self.template_type = template_type
-    
-    def run(self):
-        print(f"模板类型: {self.template_type}")
-        return CStatus()
-```
-
-### 超时控制
-
-```python
-def tutorial_timeout():
-    pipeline = GPipeline()
-    slow_node = SlowNode()
-    pipeline.registerGElement(slow_node, set(), "slowNode")
-    
-    # 设置节点的超时时间（毫秒）
-    slow_node.setTimeout(5000)
-    pipeline.process()
-```
 
 ## 高级特性
 
