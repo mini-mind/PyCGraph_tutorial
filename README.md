@@ -215,7 +215,7 @@ def tutorial_simple():
     a, b, c, d = MyNode1(), MyNode2(), MyNode1(), MyNode2()
 
     # 2. 注册节点及其依赖关系
-    # registerGElement(节点, 依赖集合, 节点名称, 并行度)
+    # registerGElement(节点, 依赖集合, 节点名称, 循环次数)
     pipeline.registerGElement(a, set(), "nodeA")        # a 无依赖，首先执行
     pipeline.registerGElement(b, {a}, "nodeB")          # b 依赖 a，等 a 完成后执行
     pipeline.registerGElement(c, {a}, "nodeC")          # c 依赖 a，与 b 并行执行
@@ -277,6 +277,8 @@ CGraph 会自动根据依赖关系确定执行顺序：
 
 当我们需要将多个相关的节点组合在一起作为一个逻辑单元时，可以使用 `GCluster`（集群）。集群可以简化复杂图的管理，并提供统一的控制接口。
 
+**注意**：GCluster 是 GRegion 的弱化版本，内部将节点按照添加顺序依次执行。如果需要更复杂的节点组合逻辑，建议优先使用 GRegion。
+
 ### 什么是集群？
 
 集群是将多个节点打包成一个逻辑单元的机制：
@@ -287,7 +289,7 @@ CGraph 会自动根据依赖关系确定执行顺序：
 ### 集群的执行模式
 
 集群内的节点执行方式：
-- **并行执行**：集群内的所有节点会并行执行（受并行度限制）
+- **顺序执行**：集群内的节点按照添加顺序依次执行
 - **无依赖关系**：集群内节点之间没有依赖关系
 - **整体完成**：只有当集群内所有节点都完成时，集群才算完成
 
@@ -325,7 +327,7 @@ def tutorial_cluster():
 
     # 4. 注册节点和集群到管道
     pipeline.registerGElement(a, set(), "nodeA")
-    pipeline.registerGElement(b_cluster, {a}, "clusterB", 2)  # 集群并行度为2
+    pipeline.registerGElement(b_cluster, {a}, "clusterB", 2)  # 集群循环执行2次
     pipeline.registerGElement(c, {a}, "nodeC")
     pipeline.registerGElement(d, {b_cluster, c}, "nodeD", 2)
 
@@ -342,19 +344,19 @@ b_cluster = GCluster([b1, b2, b3])
 - 传入节点列表，不是依赖关系
 - 列表中的节点会被组合成一个逻辑单元
 
-#### 并行度控制
+#### 循环次数控制
 ```python
 pipeline.registerGElement(b_cluster, {a}, "clusterB", 2)
 ```
-- 第4个参数 `2` 表示集群的并行度
-- 意味着集群内最多同时执行2个节点
-- 如果集群有3个节点，会先执行2个，完成后再执行第3个
+- 第4个参数 `2` 表示集群的循环执行次数
+- 意味着整个集群会执行2次（每次都是顺序执行集群内的所有节点）
+- 默认值为1，表示只执行一次
 
 ### 执行流程分析
 
 1. **A 节点执行**：首先执行，无依赖
 2. **B 集群和 C 节点并行执行**：
-   - B 集群内的 b1, b2, b3 开始执行（最多2个并行）
+   - B 集群内的 b1, b2, b3 按顺序执行（执行2次）
    - C 节点同时开始执行
 3. **D 节点执行**：等待 B 集群和 C 节点都完成
 
@@ -383,10 +385,13 @@ b_cluster.addGAspect(MyTimerAspect())  # 为整个集群添加切面
 
 ```text
 [时间戳] nodeA, 进入 MyNode1 执行...
-[时间戳] nodeB1, 进入 MyNode1 执行...  # 集群内节点开始执行
-[时间戳] nodeB2, 进入 MyNode1 执行...  # 最多2个并行
+[时间戳] nodeB1, 进入 MyNode1 执行...  # 集群内节点按顺序执行
+[时间戳] nodeB2, 进入 MyNode1 执行...  # 顺序执行
+[时间戳] nodeB3, 进入 MyNode2 执行...  # 顺序执行
+[时间戳] nodeB1, 进入 MyNode1 执行...  # 第2次循环开始
+[时间戳] nodeB2, 进入 MyNode1 执行...  # 第2次循环
+[时间戳] nodeB3, 进入 MyNode2 执行...  # 第2次循环
 [时间戳] nodeC, 进入 MyNode2 执行...   # 与集群并行
-[时间戳] nodeB3, 进入 MyNode2 执行...  # 前面的完成后执行
 [时间戳] nodeD, 进入 MyNode1 执行...   # 等集群和C都完成
 ```
 
@@ -808,24 +813,23 @@ class MyTimerAspect(GAspect):
     """
     定时器切面：监控节点执行时间
     """
-    def beforeRun(self):
+    _start_time = None
+    
+    def beginRun(self):
         """
         在节点执行前调用
         """
-        self.start_time = time.time()
-        belong_name = self.getBelongName()  # 获取所属节点名称
-        print(f"[TimerAspect] {belong_name} 开始执行...")
+        self._start_time = time.time()
+        print(f"[TimerAspect] {self.getName()} 开始执行...")
         return CStatus()
 
-    def afterRun(self):
+    def finishRun(self, curStatus: CStatus):
         """
         在节点执行后调用
         """
-        end_time = time.time()
-        duration = end_time - self.start_time
-        belong_name = self.getBelongName()
-        print(f"[TimerAspect] {belong_name} 执行完成，耗时: {duration:.3f}秒")
-        return CStatus()
+        span = time.time() - self._start_time
+        print(f"[TimerAspect] {self.getName()} 执行完成，耗时: {span:.3f}秒")
+        return
 ```
 
 ### 创建日志切面
@@ -835,16 +839,14 @@ class MyLogAspect(GAspect):
     """
     日志切面：记录详细的执行信息
     """
-    def beforeRun(self):
-        belong_name = self.getBelongName()
-        print(f"[LogAspect] === {belong_name} 准备执行 ===")
+    def beginRun(self):
+        print(f"[LogAspect] === {self.getName()} 准备执行 ===")
         print(f"[LogAspect] 当前时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
         return CStatus()
 
-    def afterRun(self):
-        belong_name = self.getBelongName()
-        print(f"[LogAspect] === {belong_name} 执行结束 ===")
-        return CStatus()
+    def finishRun(self, curStatus: CStatus):
+        print(f"[LogAspect] === {self.getName()} 执行结束 ===")
+        return
 ```
 
 ### 使用切面
@@ -886,9 +888,9 @@ def tutorial_aspect():
 ### 切面的执行顺序
 
 当一个节点有多个切面时，执行顺序为：
-1. 按添加顺序执行所有切面的 `beforeRun()`
+1. 按添加顺序执行所有切面的 `beginRun()`
 2. 执行节点的 `run()` 方法
-3. 按相反顺序执行所有切面的 `afterRun()`
+3. 按相反顺序执行所有切面的 `finishRun()`
 
 ```python
 # 添加顺序：Timer -> Log
@@ -896,11 +898,11 @@ node.addGAspect(MyTimerAspect())
 node.addGAspect(MyLogAspect())
 
 # 执行顺序：
-# 1. MyTimerAspect.beforeRun()
-# 2. MyLogAspect.beforeRun()
+# 1. MyTimerAspect.beginRun()
+# 2. MyLogAspect.beginRun()
 # 3. node.run()
-# 4. MyLogAspect.afterRun()
-# 5. MyTimerAspect.afterRun()
+# 4. MyLogAspect.finishRun()
+# 5. MyTimerAspect.finishRun()
 ```
 
 ## 事件处理
@@ -930,29 +932,21 @@ class MyPrintEvent(GEvent):
     """
     简单的打印事件处理器
     """
-    def trigger(self, *args):
+    def trigger(self, _):
         """
         事件触发时的处理逻辑
-        args: 事件触发时传递的参数
         """
-        print(f"[PrintEvent] 收到事件，参数: {args}")
-
-        # 可以在这里实现复杂的事件处理逻辑
-        if args:
-            source = args[0] if len(args) > 0 else "未知"
-            message = args[1] if len(args) > 1 else "无消息"
-            print(f"[PrintEvent] 事件来源: {source}, 消息: {message}")
-
+        print(f"[PrintEvent] 收到事件")
         return CStatus()
 
 class MyLogEvent(GEvent):
     """
     日志记录事件处理器
     """
-    def trigger(self, *args):
+    def trigger(self, _):
         import datetime
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[LogEvent] {timestamp} - 事件记录: {args}")
+        print(f"[LogEvent] {timestamp} - 事件记录")
         return CStatus()
 ```
 
@@ -969,18 +963,15 @@ class MyEventNode(GNode):
         node_name = self.getName()
         print(f"[{node_name}] 开始执行，准备触发事件...")
 
-        # 触发事件的几种方式：
+        # 触发事件 - 使用正确的API
+        from PyCGraph import GEventType
+        self.notify("print_event", GEventType.SYNC)
+        self.notify("log_event", GEventType.SYNC)
 
-        # 1. 触发简单事件
-        self.asyncGEvent("print_event", node_name, "节点执行完成")
-
-        # 2. 触发日志事件
-        self.asyncGEvent("log_event", f"节点 {node_name} 状态更新")
-
-        # 3. 根据条件触发不同事件
+        # 根据条件触发不同事件
         import random
         if random.random() > 0.5:
-            self.asyncGEvent("print_event", node_name, "随机事件触发")
+            self.notify("print_event", GEventType.SYNC)
 
         print(f"[{node_name}] 执行完成")
         return CStatus()
@@ -1027,8 +1018,9 @@ def tutorial_event():
 
 #### 1. 事件参数传递
 ```python
-# 可以传递任意数量和类型的参数
-self.asyncGEvent("my_event", "字符串参数", 123, {"key": "value"}, [1, 2, 3])
+# 事件触发时不传递参数，使用notify方法
+from PyCGraph import GEventType
+self.notify("my_event", GEventType.SYNC)
 ```
 
 #### 2. 条件事件触发
@@ -1038,10 +1030,11 @@ class ConditionalEventNode(GNode):
         param = self.getGParam("shared_param")
         param.lock()
         try:
+            from PyCGraph import GEventType
             if param.value > 10:
-                self.asyncGEvent("high_value_event", param.value)
+                self.notify("high_value_event", GEventType.SYNC)
             else:
-                self.asyncGEvent("low_value_event", param.value)
+                self.notify("low_value_event", GEventType.SYNC)
         finally:
             param.unlock()
         return CStatus()
@@ -1106,9 +1099,11 @@ class MyTemplateNode(GNode):
 ```python
 def tutorial_timeout():
     pipeline = GPipeline()
-    # 设置超时时间（毫秒）
-    pipeline.setTimeout(5000)
-    # ... 其他配置
+    slow_node = SlowNode()
+    pipeline.registerGElement(slow_node, set(), "slowNode")
+    
+    # 设置节点的超时时间（毫秒）
+    slow_node.setTimeout(5000)
     pipeline.process()
 ```
 
@@ -1150,13 +1145,16 @@ def tutorial_multi_pipeline():
 ```python
 def tutorial_timeout():
     """
-    设置管道执行超时
+    设置节点执行超时
     """
     pipeline = GPipeline()
-    # 设置超时时间（毫秒）
-    pipeline.setTimeout(5000)  # 5秒超时
+    slow_node = SlowNode()
+    pipeline.registerGElement(slow_node, set(), "slowNode")
+    
+    # 设置节点的超时时间（毫秒）
+    slow_node.setTimeout(5000)  # 5秒超时
 
-    # 如果执行超过5秒，会自动终止
+    # 如果节点执行超过5秒，会自动终止
     pipeline.process()
 ```
 
